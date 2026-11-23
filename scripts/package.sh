@@ -52,7 +52,8 @@ fi
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS
 )
 tar -czf "dist/${NAME}.tar.gz" -C dist "$NAME"
-shasum -a 256 "dist/${NAME}.tar.gz" > "dist/${NAME}.tar.gz.sha256"
+# Reference the bare filename so `shasum -c` works right after downloading.
+( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
 
 echo
 echo "✓ dist/${NAME}.tar.gz  ($(du -h "dist/${NAME}.tar.gz" | awk '{print $1}'))"
