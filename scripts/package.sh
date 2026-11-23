@@ -24,10 +24,25 @@ mkdir -p "$STAGE/bin" "$STAGE/skill"
 ditto "$BIN" "$STAGE/bin/sweep"
 chmod +x "$STAGE/bin/sweep"
 
+# SwiftPM release binaries embed the build machine's source paths in their
+# debug symbols. Strip them so a released binary does not leak a home folder,
+# then re-sign: editing the file invalidates the linker signature.
+strip -S "$STAGE/bin/sweep"
+codesign --force --sign - "$STAGE/bin/sweep" >/dev/null 2>&1
+if grep -aq "$HOME" "$STAGE/bin/sweep"; then
+  echo "refusing to ship: binary still contains $HOME"; exit 1
+fi
+
 ditto install.sh "$STAGE/install.sh"
 chmod +x "$STAGE/install.sh"
 ditto README.md "$STAGE/README.md"
+ditto LICENSE "$STAGE/LICENSE"
+ditto NOTICE.md "$STAGE/NOTICE.md"
+ditto vendor/engine/LICENSE "$STAGE/LICENSE.engine"
+
+# Ship only the template: the concrete patch embeds this machine's binary path.
 ditto dsh-bundle "$STAGE/dsh-bundle"
+rm -f "$STAGE/dsh-bundle/cordis.patch.yml"
 if [ -d "$HOME/.agents/skills/sweep-clean" ]; then
   ditto "$HOME/.agents/skills/sweep-clean" "$STAGE/skill/sweep-clean"
 fi
