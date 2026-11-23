@@ -1,0 +1,4 @@
+- insert:
+    - id: sweep-panel
+      name: '@local/sweep-panel'
+      config: {}

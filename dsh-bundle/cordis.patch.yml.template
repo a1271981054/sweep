@@ -1,0 +1,10 @@
+- insert:
+    - id: sweep-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: sweep
+        transport: stdio
+        command: __MACSAI_BIN__
+        args:
+          - mcp
+        failOnStartupError: false

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "磁盘面板",
+    "description": "在输入框上方显示磁盘可用空间、最近一次扫描的类别占用，以及自主度与权限状态；数据来自本机 sweep helper 的只读接口。",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,0 +1,15 @@
+# Build output
+.build/
+.swiftpm/
+vendor/engine/.build/
+
+# Release artifacts (scripts/package.sh produces these)
+dist/
+*.tar.gz
+*.sha256
+
+# Generated per-machine: install.sh writes the real binary path into it
+dsh-bundle/cordis.patch.yml
+
+# macOS
+.DS_Store

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Sweep cleanup",
+    "description": "Scan disk usage, system junk, project junk, large, old and duplicate files, and clean the approved ones through a two-step plan with a digest and Trash-based undo.",
+    "detail": "docs/DETAIL.md"
+  }
+}

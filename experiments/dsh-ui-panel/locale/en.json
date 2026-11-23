@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Disk panel",
+    "description": "Shows free space, the category breakdown of the latest scan, and the autonomy and permission state above the composer, fed by the local sweep helper's read-only endpoint.",
+    "detail": "docs/DETAIL.md"
+  }
+}
