@@ -44,6 +44,8 @@ ditto vendor/engine/LICENSE "$STAGE/LICENSE.engine"
 ditto dsh-bundle "$STAGE/dsh-bundle"
 rm -f "$STAGE/dsh-bundle/cordis.patch.yml"
 # From the repo, not ~/.agents: the release must not depend on this machine.
+ditto web "$STAGE/web"
+
 if [ -d skill/sweep-clean ]; then
   ditto skill/sweep-clean "$STAGE/skill/sweep-clean"
 fi

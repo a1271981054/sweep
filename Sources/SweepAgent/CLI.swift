@@ -39,8 +39,10 @@ public enum CLIRunner {
             fdaCommand()
         case "chart":
             chartCommand(Options(args))
+        case "ui":
+            uiCommand()
         case "version", "--version":
-            print("sweep 0.2.2 · scan engine MacCleanKit (BSD-3, see NOTICE)")
+            print("sweep 0.3.0 · scan engine MacCleanKit (BSD-3, see NOTICE)")
         case "help", "--help", "-h":
             usage()
         default:
@@ -132,6 +134,16 @@ public enum CLIRunner {
             denied = d
             allEntries = makeEntries(items, limit: 20_000, category: "old_files")
 
+        case "installers":
+            let result = await InstallersScanner().scan(
+                roots: resolve(options.roots, default: ["~/Downloads", "~/Desktop"]),
+                olderThanDays: options.days,
+                limit: options.limit
+            )
+            groups = result.groups
+            denied = result.deniedPaths
+            allEntries = result.entries
+
         case "duplicates", "dup":
             let (g, d, deletable, hashed) = await DuplicateScanner().scan(
                 roots: resolve(options.roots, default: DefaultRoots.documents),
@@ -195,6 +207,21 @@ public enum CLIRunner {
         } else {
             printHuman(report)
         }
+    }
+
+    // MARK: - Web UI
+
+    static func uiCommand() {
+        guard HelperClient.isAvailable() else {
+            print("helper 未运行，先安装：sweep helper-install")
+            exit(1)
+        }
+        let url = "http://127.0.0.1:\(StatusServer.defaultPort)/"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [url]
+        try? process.run()
+        print(url)
     }
 
     // MARK: - Chart
@@ -547,6 +574,7 @@ public enum CLIRunner {
             "large-files": "大文件", "large": "大文件",
             "old-files": "旧文件", "old": "旧文件",
             "duplicates": "重复文件", "dup": "重复文件",
+            "installers": "安装包",
             "smart": "智能扫描",
         ]
         print("")
@@ -630,6 +658,7 @@ public enum CLIRunner {
         用法:
           sweep disk [--json]
           sweep mcp                         以 stdio 方式启动 MCP 服务器（给 agent 用）
+          sweep ui                          打开本地清理界面
           sweep chart --disk | --status | --ops     磁盘 / 状态 / 清理记录
           sweep chart --snapshot S [--list]         扫描结果（--list 出文件清单）
           sweep chart --plan P               把计划渲染成图片（确认前给用户看）
@@ -648,6 +677,7 @@ public enum CLIRunner {
           large-files    大文件（默认 ≥200MB）
           old-files      旧文件（默认 ≥365 天未改）
           duplicates     重复文件（四段式，仅字节相同）
+          installers     安装包（过期 / 尚未安装）
           smart          智能扫描 = 系统垃圾 + 项目垃圾
 
         选项:

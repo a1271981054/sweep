@@ -53,7 +53,17 @@ cd sweep-0.2.0-macos-universal
 | `cleanup_mode` | 读/改自主度 | 否 |
 | `render_chart` / `sweep chart` | 把扫描或计划渲染成 PNG 并作为 image 内容块返回 | 否 |
 
-## 界面：用图片，不用 HTML
+## 本地清理界面
+
+```bash
+sweep ui      # → http://127.0.0.1:47901/
+```
+
+由 helper（持完全磁盘访问权限）直接服务的本地页面，一次跑完系统垃圾、项目垃圾、重复文件、安装包四类扫描；勾选后一次点击完成 `plan → apply`，附带撤销。
+
+页面资源在 `~/.local/share/sweep/web/`，改界面不需要重编译（重编译会更换 helper 签名、需要重新授权）。
+
+## 图片视图
 
 客户端没有 UI 是核心痛点，但**不能靠 HTML**：对话里的 HTML 不会被渲染，iframe 拿不到主题与 locale。
 

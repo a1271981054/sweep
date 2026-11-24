@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>sweep</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="shell">
+  <header class="bar">
+    <div class="wordmark">sweep</div>
+    <div class="disk">
+      <span class="disk__value" id="disk-free">--</span>
+      <span class="disk__meta" id="disk-used">--</span>
+    </div>
+  </header>
+
+  <section class="gauge" aria-hidden="true">
+    <div class="gauge__fill" id="disk-bar"></div>
+  </section>
+
+  <section class="panel" id="panel" aria-live="polite">
+    <div class="skeleton" id="skeleton">
+      <div class="skeleton__row"></div>
+      <div class="skeleton__row"></div>
+      <div class="skeleton__row"></div>
+    </div>
+  </section>
+
+  <footer class="action" id="action">
+    <div class="action__sum">
+      <span class="action__bytes" id="sum-bytes">0 B</span>
+      <span class="action__count" id="sum-count">未选择</span>
+    </div>
+    <div class="action__controls">
+      <button class="btn btn--ghost" id="undo" hidden>撤销</button>
+      <button class="btn btn--primary" id="clean" disabled>清理</button>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

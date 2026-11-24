@@ -43,6 +43,15 @@ if [ -d "$ROOT/dsh-bundle" ]; then
   echo "✓ DSH bundle  $TARGET"
 fi
 
+# --- 2b. web interface -------------------------------------------------------
+if [ -d "$ROOT/web" ]; then
+  WEB="$HOME/.local/share/sweep/web"
+  rm -rf "$WEB"
+  mkdir -p "$WEB"
+  ditto "$ROOT/web" "$WEB"
+  echo "✓ interface  $WEB"
+fi
+
 # --- 3. skill --------------------------------------------------------------
 if [ -d "$ROOT/skill/sweep-clean" ]; then
   mkdir -p "$HOME/.agents/skills"
@@ -63,7 +72,8 @@ cat <<EOF
 
 下一步：
   1. 看磁盘           $DEST disk
-  2. 扫系统垃圾       $DEST scan system-junk
+  2. 打开清理界面     $DEST ui
+  3. 扫系统垃圾       $DEST scan system-junk
   3. 接入 MCP 客户端  $DEST mcp-config codex    # 或 claude / cursor / dsh / json
   4. 自主度           $DEST mode                # readonly | confirm | auto
 

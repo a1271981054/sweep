@@ -55,25 +55,96 @@ public final class StatusServer {
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
+        receive(connection, buffer: Data())
+    }
+
+    private func receive(_ connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
-            let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let body = self.payload(for: request)
-            let response = """
-            HTTP/1.1 200 OK\r
-            Content-Type: application/json; charset=utf-8\r
-            Access-Control-Allow-Origin: *\r
-            Access-Control-Allow-Methods: GET, OPTIONS\r
-            Cache-Control: no-store\r
-            Content-Length: \(body.utf8.count)\r
-            Connection: close\r
-            \r
-            \(body)
-            """
-            connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
+            var accumulated = buffer
+            if let data { accumulated.append(data) }
+
+            if let request = Self.parse(accumulated) {
+                self.respond(to: request, on: connection)
+            } else if isComplete || error != nil {
                 connection.cancel()
-            })
+            } else {
+                self.receive(connection, buffer: accumulated)
+            }
         }
+    }
+
+    /// Minimal HTTP/1.1 request reader: headers, then Content-Length bytes.
+    static func parse(_ data: Data) -> WebApp.Request? {
+        guard let separator = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let headerData = data[data.startIndex..<separator.lowerBound]
+        guard let headerText = String(data: headerData, encoding: .utf8) else { return nil }
+
+        var lines = headerText.components(separatedBy: "\r\n")
+        guard !lines.isEmpty else { return nil }
+        let requestLine = lines.removeFirst().components(separatedBy: " ")
+        guard requestLine.count >= 2 else { return nil }
+
+        let pathWithQuery = requestLine[1]
+        let parts = pathWithQuery.components(separatedBy: "?")
+        let path = parts.first ?? "/"
+        var query: [String: String] = [:]
+        if parts.count > 1 {
+            for pair in parts[1].components(separatedBy: "&") {
+                let kv = pair.components(separatedBy: "=")
+                if kv.count == 2 {
+                    query[kv[0]] = kv[1].removingPercentEncoding ?? kv[1]
+                }
+            }
+        }
+
+        var contentLength = 0
+        for line in lines {
+            let lower = line.lowercased()
+            if lower.hasPrefix("content-length:") {
+                contentLength = Int(line.components(separatedBy: ":")[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+
+        let bodyStart = separator.upperBound
+        let available = data.distance(from: bodyStart, to: data.endIndex)
+        guard available >= contentLength else { return nil }
+        let body = data.subdata(in: bodyStart..<data.index(bodyStart, offsetBy: contentLength))
+
+        return WebApp.Request(
+            method: requestLine[0].uppercased(),
+            path: path,
+            query: query,
+            body: body
+        )
+    }
+
+    private func respond(to request: WebApp.Request, on connection: NWConnection) {
+        let response: WebApp.Response
+        if request.path == "/status" {
+            let body = payload(for: request.method)
+            response = WebApp.Response(status: 200, contentType: "application/json; charset=utf-8", body: Data(body.utf8))
+        } else {
+            response = WebApp.route(request)
+        }
+
+        let head = """
+        HTTP/1.1 \(response.status) OK\r
+        Content-Type: \(response.contentType)\r
+        Access-Control-Allow-Origin: *\r
+        Access-Control-Allow-Methods: GET, POST, OPTIONS\r
+        Access-Control-Allow-Headers: Content-Type\r
+        Cache-Control: no-store\r
+        Content-Length: \(response.body.count)\r
+        Connection: close\r
+        \r
+
+        """
+        var payload = Data(head.utf8)
+        payload.append(response.body)
+        connection.send(content: payload, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 
     private func payload(for request: String) -> String {
