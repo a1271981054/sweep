@@ -73,12 +73,11 @@ public enum HelperServer {
         // Same daemon, two jobs: the FDA queue and the read-only status endpoint
         // the Web UI plugin polls.
         StatusServer.shared.start()
+        startHeartbeat()
         let fm = FileManager.default
         FileHandle.standardError.write(Data("sweep helper: watching \(HelperPaths.queue.path)\n".utf8))
 
         while true {
-            _ = fm.createFile(atPath: HelperPaths.heartbeat.path, contents: Date().description.data(using: .utf8))
-
             if let names = try? fm.contentsOfDirectory(atPath: HelperPaths.queue.path) {
                 for name in names.sorted() where name.hasSuffix(".json") {
                     let url = HelperPaths.queue.appendingPathComponent(name)
@@ -86,6 +85,21 @@ public enum HelperServer {
                 }
             }
             Thread.sleep(forTimeInterval: 0.4)
+        }
+    }
+
+    /// A scan blocks this loop for a minute; without an independent beat the
+    /// client would call the helper unavailable mid-scan and fall back to a
+    /// process that has no Full Disk Access.
+    private static func startHeartbeat() {
+        Thread.detachNewThread {
+            while true {
+                _ = FileManager.default.createFile(
+                    atPath: HelperPaths.heartbeat.path,
+                    contents: Date().description.data(using: .utf8)
+                )
+                Thread.sleep(forTimeInterval: 2)
+            }
         }
     }
 
@@ -130,10 +144,14 @@ public enum HelperServer {
 
 public enum HelperClient {
     public static func isAvailable() -> Bool {
-        guard let values = try? HelperPaths.heartbeat.resourceValues(forKeys: [.contentModificationDateKey]),
-              let modified = values.contentModificationDate
-        else { return false }
-        return Date().timeIntervalSince(modified) < 5
+        if let values = try? HelperPaths.heartbeat.resourceValues(forKeys: [.contentModificationDateKey]),
+           let modified = values.contentModificationDate,
+           Date().timeIntervalSince(modified) < 10 {
+            return true
+        }
+        // Fall back to asking it directly: a cold start may not have written a
+        // heartbeat yet, but the endpoint answering proves it is up.
+        return HelperStatus.fetch(timeout: 1, attempts: 1) != nil
     }
 
     /// Sends one scan to the helper and waits for its result. Nil when the

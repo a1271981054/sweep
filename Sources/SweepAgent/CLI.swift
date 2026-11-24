@@ -40,7 +40,7 @@ public enum CLIRunner {
         case "chart":
             chartCommand(Options(args))
         case "version", "--version":
-            print("sweep 0.2.1 · scan engine MacCleanKit (BSD-3, see NOTICE)")
+            print("sweep 0.2.2 · scan engine MacCleanKit (BSD-3, see NOTICE)")
         case "help", "--help", "-h":
             usage()
         default:
