@@ -55,11 +55,8 @@ fi
 if [ "${SWEEP_SKIP_HELPER:-0}" != "1" ]; then
   echo
   echo "→ installing the Full Disk Access helper…"
-  if "$DEST" helper-install; then
-    echo "  需要手动授权一次（之后四个客户端共用）："
-    echo "  系统设置 → 隐私与安全性 → 完全磁盘访问权限 → + →"
-    echo "  $HOME/Library/Application Support/SweepHelper/Sweep Helper.app"
-  fi
+  # helper-install prints the grant instructions itself.
+  "$DEST" helper-install || echo "  helper 安装失败，可稍后重试：$DEST helper-install"
 fi
 
 cat <<EOF

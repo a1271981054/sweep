@@ -4,7 +4,7 @@
       config:
         serverName: sweep
         transport: stdio
-        command: __MACSAI_BIN__
+        command: __SWEEP_BIN__
         args:
           - mcp
         failOnStartupError: false

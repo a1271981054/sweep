@@ -40,7 +40,7 @@ public enum CLIRunner {
         case "chart":
             chartCommand(Options(args))
         case "version", "--version":
-            print("sweep 0.2.0 · scan engine MacCleanKit (BSD-3, see NOTICE)")
+            print("sweep 0.2.1 · scan engine MacCleanKit (BSD-3, see NOTICE)")
         case "help", "--help", "-h":
             usage()
         default:
@@ -342,7 +342,8 @@ public enum CLIRunner {
             print("  系统设置 → 隐私与安全性 → 完全磁盘访问权限 → + →")
             print("  选择 \(HelperPaths.bundle.path)")
             print("")
-            print("授权后运行 `sweep fda` 确认；四个 MCP 客户端会共用这一次授权。")
+            print("授权后执行 `sweep helper-install` 重启 helper 生效。")
+            print("判据：扫描结果里的 deniedPaths 变为空；四个 MCP 客户端共用这一次授权。")
         } catch {
             fail(error.localizedDescription)
         }

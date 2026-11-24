@@ -43,8 +43,9 @@ ditto vendor/engine/LICENSE "$STAGE/LICENSE.engine"
 # Ship only the template: the concrete patch embeds this machine's binary path.
 ditto dsh-bundle "$STAGE/dsh-bundle"
 rm -f "$STAGE/dsh-bundle/cordis.patch.yml"
-if [ -d "$HOME/.agents/skills/sweep-clean" ]; then
-  ditto "$HOME/.agents/skills/sweep-clean" "$STAGE/skill/sweep-clean"
+# From the repo, not ~/.agents: the release must not depend on this machine.
+if [ -d skill/sweep-clean ]; then
+  ditto skill/sweep-clean "$STAGE/skill/sweep-clean"
 fi
 
 (
