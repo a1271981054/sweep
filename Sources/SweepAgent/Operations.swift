@@ -10,6 +10,7 @@ public enum AgentPaths {
     public static var plans: URL { root.appendingPathComponent("plans", isDirectory: true) }
     public static var config: URL { root.appendingPathComponent("config.json") }
     public static var operations: URL { root.appendingPathComponent("operations.jsonl") }
+    public static var trashEmpties: URL { root.appendingPathComponent("trash-empties.jsonl") }
 
     public static func ensure() {
         for directory in [root, snapshots, plans] {
@@ -114,6 +115,7 @@ public enum CleanError: Error, LocalizedError {
     case notAllowedInAuto(String)
     case operationNotFound(String)
     case emptySelection
+    case trashAccessDenied
 
     public var errorDescription: String? {
         switch self {
@@ -132,6 +134,7 @@ public enum CleanError: Error, LocalizedError {
         case .notAllowedInAuto(let category): return "Category not allowed in auto mode: \(category)"
         case .operationNotFound(let id): return "Operation not found: \(id)"
         case .emptySelection: return "No entries selected."
+        case .trashAccessDenied: return "无权访问 ~/.Trash，请为 Sweep Helper 授予完全磁盘访问权限。"
         }
     }
 }

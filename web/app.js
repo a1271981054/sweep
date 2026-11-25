@@ -65,6 +65,17 @@
   let diskStats = { totalBytes: 0, availableBytes: 0, freeBytes: 0, purgeableBytes: 0, usedBytes: 0, usedPercent: 0 };
   let cpuHistory = [];
   let metricsTimer = null;
+  let agentMode = "confirm";
+
+  let trashState = {
+    open: false,
+    items: 0,
+    bytes: 0,
+    digest: "",
+    denied: false,
+    top: [],
+    loading: false,
+  };
 
   let inspector = {
     open: false,
@@ -541,8 +552,10 @@
 
     const modeLabels = { confirm: "确认模式", auto: "自动模式", readonly: "只读模式" };
     const agent = data.agent || {};
+    if (agent.mode) agentMode = agent.mode;
     $("agent-mode").textContent = modeLabels[agent.mode] || agent.mode || "--";
     $("agent-fda").textContent = agent.fullDiskAccess ? "全盘权限" : "受限权限";
+    if (trashState.denied && agent.fullDiskAccess && !trashState.loading) loadTrash();
 
     const cpu = data.cpu || {};
     const cpuPct = typeof cpu.usagePercent === "number" ? cpu.usagePercent : 0;
@@ -641,6 +654,7 @@
       diskStats.usedBytes = disk.usedBytes;
       if (!diskStats.freeBytes) diskStats.freeBytes = disk.availableBytes;
 
+      if (state.mode) agentMode = state.mode;
       if (operations && operations.length && !lastOperation) {
         lastOperation = operations[operations.length - 1];
         $("undo").hidden = !lastOperation;
@@ -819,6 +833,7 @@
     dot.classList.toggle("is-scanning", scanning);
     dot.classList.toggle("is-ready", !scanning && scanStatus === "就绪");
     $("rescan").disabled = scanning || busy;
+    renderTrashPill();
 
     const scanRatio = !scanning && scanStatus === "就绪" ? 1 : Math.min(1, Math.max(0, scanProgress));
     const pctText = (!scanning && scanStatus === "就绪" ? 100 : scanPercent) + "%";
@@ -1514,7 +1529,10 @@
   $("drawer-done").addEventListener("click", closeInspector);
   $("drawer-backdrop").addEventListener("click", closeInspector);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && inspector.open) closeInspector();
+    if (event.key === "Escape") {
+      if (trashState.open) closeTrashModal();
+      else if (inspector.open) closeInspector();
+    }
   });
 
   $("drawer-search").addEventListener("input", (event) => {
@@ -1555,6 +1573,194 @@
   $("drawer-load-more").addEventListener("click", () => {
     if (!inspector.loading) fetchInspectorPage(true);
   });
+
+  // ---------------------------------------------------------------- Trash modal & empty
+
+  function fmtDateShort(iso) {
+    if (!iso) return "";
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return "";
+    const days = Math.max(0, Math.floor((Date.now() - ms) / 86400000));
+    return fmtAge(days);
+  }
+
+  function renderTrashPill() {
+    const pill = $("trash-pill");
+    const label = $("trash-summary");
+    const btn = $("trash-open");
+    if (!pill || !label || !btn) return;
+
+    if (trashState.denied) {
+      pill.classList.remove("has-items");
+      label.textContent = "废纸篓 需授权";
+      btn.textContent = "查看";
+      btn.disabled = busy;
+      return;
+    }
+
+    if (trashState.items > 0) {
+      pill.classList.add("has-items");
+      label.textContent = "废纸篓 " + fmt(trashState.bytes) + " · " + fmtCount(trashState.items);
+      btn.textContent = "清空废纸篓";
+      btn.disabled = busy;
+    } else {
+      pill.classList.remove("has-items");
+      label.textContent = "废纸篓 已空";
+      btn.textContent = "清空废纸篓";
+      btn.disabled = true;
+    }
+  }
+
+  function renderTrashModal() {
+    if (!trashState.open) return;
+
+    const listEl = $("trash-list");
+    const totalsEl = $("trash-modal-totals");
+    const warnTextEl = $("trash-modal-warn-text");
+    const confirmBtn = $("trash-confirm");
+
+    if (trashState.denied) {
+      totalsEl.textContent = "无法读取";
+      warnTextEl.textContent = "Sweep Helper 尚未获得 ~/.Trash 的完全磁盘访问权限。请打开「系统设置 → 隐私与安全性 → 完全磁盘访问权限」，确认已启用 Sweep Helper.app。";
+      listEl.innerHTML = '<div class="empty">无权访问废纸篓 (~/.Trash)</div>';
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "确认清空";
+      return;
+    }
+
+    totalsEl.textContent = fmtCount(trashState.items) + " · " + fmt(trashState.bytes);
+    if (agentMode === "readonly") {
+      warnTextEl.textContent = "当前处于 readonly 只读模式，清空废纸篓操作已被锁定。";
+    } else {
+      warnTextEl.textContent = "清空后将从磁盘永久删除废纸篓中的全部内容并释放空间；此前清理进入废纸篓的文件将无法通过「撤销」找回。";
+    }
+
+    listEl.innerHTML = "";
+    if (trashState.loading && !trashState.top.length) {
+      listEl.innerHTML = '<div class="skeleton__card"></div>';
+    } else if (!trashState.items) {
+      listEl.innerHTML = '<div class="empty">废纸篓已为空</div>';
+    } else {
+      for (const entry of trashState.top) {
+        const row = document.createElement("div");
+        row.className = "trash-row";
+
+        const left = document.createElement("div");
+        left.className = "trash-row__left";
+
+        const kind = document.createElement("span");
+        kind.className = "trash-row__kind";
+        kind.textContent = entry.isDirectory ? "目录" : "文件";
+
+        const nameEl = document.createElement("span");
+        nameEl.className = "trash-row__name";
+        nameEl.textContent = entry.name || fileName(entry.path || "");
+        nameEl.title = entry.path || "";
+
+        left.append(kind, nameEl);
+
+        const right = document.createElement("div");
+        right.className = "trash-row__right";
+
+        const ageText = fmtDateShort(entry.modified);
+        if (ageText) {
+          const dateEl = document.createElement("span");
+          dateEl.className = "trash-row__date";
+          dateEl.textContent = ageText;
+          right.appendChild(dateEl);
+        }
+
+        const bytesEl = document.createElement("span");
+        bytesEl.className = "trash-row__bytes";
+        bytesEl.textContent = fmt(entry.bytes);
+        right.appendChild(bytesEl);
+
+        row.append(left, right);
+        listEl.appendChild(row);
+      }
+      if (trashState.items > trashState.top.length) {
+        const more = document.createElement("div");
+        more.className = "trash-row__date";
+        more.style.textAlign = "center";
+        more.style.padding = "4px 0";
+        more.textContent = "另含 " + (trashState.items - trashState.top.length) + " 项较小项目，也将一并清空";
+        listEl.appendChild(more);
+      }
+    }
+
+    const canEmpty = !busy && !trashState.loading && agentMode !== "readonly" && trashState.items > 0;
+    confirmBtn.disabled = !canEmpty;
+    confirmBtn.textContent = busy
+      ? "清空中…"
+      : (trashState.items > 0 ? "确认清空 · " + fmt(trashState.bytes) : "确认清空");
+  }
+
+  async function loadTrash() {
+    trashState.loading = true;
+    try {
+      const res = await fetch("/api/trash", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      trashState.items = data.items || 0;
+      trashState.bytes = data.bytes || 0;
+      trashState.digest = data.digest || "";
+      trashState.denied = Boolean(data.denied);
+      trashState.top = Array.isArray(data.top) ? data.top : [];
+      renderTrashPill();
+      renderTrashModal();
+    } catch (_) {
+      // keep existing trash state on transient error
+    } finally {
+      trashState.loading = false;
+      renderTrashModal();
+    }
+  }
+
+  function openTrashModal() {
+    trashState.open = true;
+    $("trash-modal").hidden = false;
+    renderTrashModal();
+    loadTrash();
+  }
+
+  function closeTrashModal() {
+    trashState.open = false;
+    $("trash-modal").hidden = true;
+  }
+
+  async function confirmEmptyTrash() {
+    if (busy || trashState.denied || trashState.items === 0) return;
+    busy = true;
+    updateChrome();
+    renderTrashModal();
+    try {
+      const res = await fetch("/api/trash/empty", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ digest: trashState.digest }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "清空废纸篓失败");
+
+      lastOperation = null;
+      $("undo").hidden = true;
+      closeTrashModal();
+
+      const msg = result.deletedCount > 0
+        ? "已永久清空废纸篓 " + fmt(result.deletedBytes) + (result.failedCount ? " · 跳过 " + result.failedCount : "")
+        : "废纸篓已为空";
+      toast(msg);
+
+      await Promise.all([loadState(), loadMetrics(), loadTrash()]);
+    } catch (error) {
+      toast(String(error.message || error));
+      await loadTrash();
+    } finally {
+      busy = false;
+      updateChrome();
+      renderTrashModal();
+    }
+  }
 
   // ---------------------------------------------------------------- actions
 
@@ -1727,8 +1933,7 @@
       toast("已清理 " + fmt(result.bytes) + (result.failedCount ? " · 跳过 " + result.failedCount : ""));
 
       if (inspector.open) closeInspector();
-      await loadState();
-      await loadMetrics();
+      await Promise.all([loadState(), loadMetrics(), loadTrash()]);
       mountedKeys.clear();
       updateChrome();
       renderRail();
@@ -1762,15 +1967,13 @@
 
       if (delta) {
         revertCleanDelta(delta);
-        await loadState();
-        await loadMetrics();
+        await Promise.all([loadState(), loadMetrics(), loadTrash()]);
         mountedKeys.clear();
         updateChrome();
         renderRail();
         renderGrid(true);
       } else {
-        await loadState();
-        await loadMetrics();
+        await Promise.all([loadState(), loadMetrics(), loadTrash()]);
       }
     } catch (error) {
       toast(String(error.message || error));
@@ -1801,8 +2004,13 @@
   $("clean").addEventListener("click", clean);
   $("undo").addEventListener("click", undo);
   $("rescan").addEventListener("click", startScan);
+  $("trash-open").addEventListener("click", openTrashModal);
+  $("trash-close").addEventListener("click", closeTrashModal);
+  $("trash-cancel").addEventListener("click", closeTrashModal);
+  $("trash-backdrop").addEventListener("click", closeTrashModal);
+  $("trash-confirm").addEventListener("click", confirmEmptyTrash);
 
-  Promise.all([loadState(), loadMetrics()]).then(() => {
+  Promise.all([loadState(), loadMetrics(), loadTrash()]).then(() => {
     startScan();
     clearInterval(metricsTimer);
     metricsTimer = setInterval(loadMetrics, 2500);

@@ -22,6 +22,8 @@ public enum CLIRunner {
             applyCommand(Options(args))
         case "restore":
             restoreCommand(Options(args))
+        case "trash":
+            trashCommand(Options(args))
         case "ops":
             opsCommand(Options(args))
         case "mode":
@@ -579,6 +581,82 @@ public enum CLIRunner {
         }
     }
 
+    static func trashCommand(_ options: Options) {
+        let summary = TrashService.inspect(limit: options.limit == 10 ? 20 : options.limit)
+
+        if !options.empty {
+            if options.json {
+                printJSON(summary)
+                return
+            }
+            if summary.denied {
+                fail(CleanError.trashAccessDenied.localizedDescription)
+            }
+            print("")
+            print("废纸篓：\(summary.items) 项 · \(Util.bytes(summary.bytes))")
+            if summary.items > 0 {
+                print(String(repeating: "─", count: 62))
+                for entry in summary.top {
+                    let tag = entry.isDirectory ? "[目录]" : "[文件]"
+                    print("  \(Util.bytes(entry.bytes).leftPadded(9))  \(tag) \(entry.name)")
+                }
+                if summary.items > summary.top.count {
+                    print("  … 其余 \(summary.items - summary.top.count) 项")
+                }
+                print("")
+                print("digest: \(summary.digest)")
+                print("清空命令: sweep trash --empty --yes")
+            }
+            print("")
+            return
+        }
+
+        if summary.denied {
+            fail(CleanError.trashAccessDenied.localizedDescription)
+        }
+        if summary.items == 0 {
+            if options.json {
+                printJSON(TrashEmptyResult(
+                    operationId: nil, deletedCount: 0, deletedBytes: 0,
+                    failedCount: 0, failures: [], remainingCount: 0, remainingBytes: 0
+                ))
+            } else {
+                print("废纸篓已为空")
+            }
+            return
+        }
+
+        if !options.yes && options.digest == nil {
+            if options.json {
+                fail("清空废纸篓是永久操作，JSON 模式请同时传入 --yes 或 --digest \(summary.digest)")
+            }
+            print("即将永久清空废纸篓 \(summary.items) 项 · \(Util.bytes(summary.bytes))（不可撤销）。")
+            print("确认清空请输入 y 并回车: ", terminator: "")
+            let answer = (readLine() ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard answer == "y" || answer == "yes" else {
+                print("已取消")
+                return
+            }
+        }
+
+        do {
+            let result = try TrashService.empty(expectedDigest: options.digest ?? summary.digest)
+            if options.json {
+                printJSON(result)
+                return
+            }
+            print("")
+            print("已永久清空废纸篓 \(result.deletedCount) 项 · \(Util.bytes(result.deletedBytes))")
+            if result.failedCount > 0 {
+                print("未能删除 \(result.failedCount) 项：")
+                for line in result.failures { print("  · \(line)") }
+            }
+            print("")
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     static func opsCommand(_ options: Options) {
         let records = OperationLog.all().suffix(max(1, options.limit))
         if records.isEmpty {
@@ -758,6 +836,7 @@ public enum CLIRunner {
           sweep plan  --snapshot S --min-bytes 5 --categories user_caches,package_manager_caches
           sweep apply --plan P --digest D     执行（移入废纸篓）
           sweep restore --op O                撤销某次操作
+          sweep trash [--empty --yes]         查看或永久清空废纸篓
           sweep ops [--limit N]               最近的操作记录
           sweep mode [readonly|confirm|auto]  查看/切换自主度
           sweep scan <module> [选项]
@@ -807,6 +886,8 @@ struct Options {
     var statusView = false
     var opsView = false
     var listView = false
+    var empty = false
+    var yes = false
     var categories: [String] = []
 
     init(_ args: [String]) {
@@ -861,6 +942,10 @@ struct Options {
                 opsView = true
             case "--list":
                 listView = true
+            case "--empty":
+                empty = true
+            case "--yes", "-y":
+                yes = true
             case "--out":
                 index += 1
                 if index < args.count { out = args[index] }

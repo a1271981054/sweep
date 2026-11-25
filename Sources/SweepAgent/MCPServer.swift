@@ -189,6 +189,27 @@ public struct MCPServer {
             ],
         ],
         [
+            "name": "trash_report",
+            "description": "Inspect items currently in the macOS Trash (~/.Trash), returning count, total bytes, top items, and a digest for confirmation. Read-only.",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["limit": scanLimit],
+                "additionalProperties": false,
+            ],
+        ],
+        [
+            "name": "empty_trash",
+            "description": "Permanently empty ~/.Trash. This is IRREVERSIBLE and cannot be undone with restore_clean. Requires the digest from trash_report after explicit user approval; disabled in readonly mode.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "digest": ["type": "string", "description": "The digest returned by trash_report, confirming the exact Trash contents approved by the user."],
+                ],
+                "required": ["digest"],
+                "additionalProperties": false,
+            ],
+        ],
+        [
             "name": "list_operations",
             "description": "List recent clean operations with ids, counts and bytes. Read-only.",
             "inputSchema": [
@@ -566,6 +587,25 @@ public struct MCPServer {
                     "restored": result.restored,
                     "failed": result.failed,
                 ]))
+            } catch {
+                toolError(id: id, error.localizedDescription)
+            }
+
+        case "trash_report":
+            let summary = TrashService.inspect(limit: limit)
+            var payload = summary.asDictionary()
+            if summary.denied {
+                payload["hint"] = CleanError.trashAccessDenied.localizedDescription
+            }
+            respond(id: id, result: textResult(payload))
+
+        case "empty_trash":
+            guard let digest = args["digest"] as? String, !digest.isEmpty else {
+                toolError(id: id, "digest from trash_report is required"); return
+            }
+            do {
+                let result = try TrashService.empty(expectedDigest: digest)
+                respond(id: id, result: textResult(result.asDictionary()))
             } catch {
                 toolError(id: id, error.localizedDescription)
             }

@@ -49,6 +49,8 @@ cd sweep-0.3.0-macos-universal
 | `plan_clean` | 用快照 + 已批准的 id 生成计划与 digest | 否 |
 | `apply_clean` | digest 匹配后移入废纸篓 | **是**（可撤销） |
 | `restore_clean` | 按操作记录放回原处 | 否（只还原） |
+| `trash_report` / `sweep trash` | 查看 `~/.Trash` 当前内容、体积与摘要 | 否 |
+| `empty_trash` / `sweep trash --empty` | digest 确认后永久清空 `~/.Trash`（`readonly` 模式禁用） | **是**（永久删除，不可撤销） |
 | `list_operations` | 最近的操作 | 否 |
 | `cleanup_mode` | 读/改自主度 | 否 |
 | `render_chart` / `sweep chart` | 把扫描或计划渲染成 PNG 并作为 image 内容块返回 | 否 |
@@ -64,6 +66,7 @@ sweep ui      # → http://127.0.0.1:47901/
 - **顶部三联遥测 Bento**：存储矩阵点阵图（已用 / 可清 / 可释 / 可用）、可清理三色环与分级分布、`GET /api/metrics` 实时系统遥测（CPU / 内存 / 累计释放记录）；
 - **流式并发扫描**：在 helper 进程内并发扫描系统垃圾、项目垃圾、重复文件与安装包，扫描中实时产出子类别卡片，无需等待 100% 即可随时勾选清理；
 - **智能分类与文件明细抽屉**：`FileAdvisor` 为文件提供「推荐清理 / 按需确认 / 谨慎保留」分级与逐条**用途及清理建议**；整卡可点击勾选，`全选` 一键选中当前可见项，点击 `全部文件 ›` 打开右侧明细抽屉（`GET /api/snapshot` 内存索引分页，支持关键词搜索、风险过滤与排序）。
+- **废纸篓预览与永久清空**：顶部导航栏实时展示 `~/.Trash` 占用与数量，点击「清空废纸篓」弹出二次确认窗预览废纸篓内大文件与不可撤销提醒，确认并校验摘要后调用 `POST /api/trash/empty` 释放空间。
 
 页面静态资源放在 `~/.local/share/sweep/web/`，修改前端后运行 `./scripts/deploy-web.sh` 即可刷新生效，不需要重编译或重新授予完全磁盘访问权限。
 
@@ -161,7 +164,7 @@ sweep fda                # 看当前权限与 helper 状态
 - 目录 URL 的 `path` 带结尾斜杠，节点表按精确路径匹配，`ProjectJunkScan.normalize` 负责归一化。
 - 只清理用户空间；`/Library` 等需要 root 的项目只报告不处理。
 - 扫描性能优化：`FileWalker` 对纯文件叶节点采用 POSIX `fts` 快速遍历并支持多目标并发；`ScanJobs` 在 helper 进程内并发跑各模块并与 `SnapshotCache` 内存索引配合，`/api/snapshot` 分页按需生成用途与建议文本，减少重复磁盘 I/O。
-- **移入废纸篓不等于释放空间**：需要在访达里清空废纸篓才真正回收，而清空后 `restore_clean` 也就无法还原了。
+- **移入废纸篓不等于释放空间**：清理默认先移入废纸篓以便撤销；确认不再需要后，可在界面右上角点击「清空废纸篓」或执行 `sweep trash --empty` 永久清空（清空后对应记录无法再通过 `restore_clean` 还原）。
 
 ## 目录
 
@@ -180,8 +183,9 @@ Sources/SweepAgent/
   StatusServer.swift      helper 本地服务状态页
   WebApp.swift            Web 清理界面 API、并发扫描调度与快照缓存
   Operations.swift        快照 / 计划 / 废纸篓 / 审计日志 / 三种模式
+  Trash.swift             废纸篓扫描、digest 校验与永久清空
   Safety.swift            受保护路径 / digest / 预算
-  MCPServer.swift         stdio MCP（11 个工具）
+  MCPServer.swift         stdio MCP（14 个工具）
   CLI.swift               子命令
 Sources/sweep/main.swift
 web/                      Grainient 暗色玻璃态 Web UI（HTML / CSS / JS）

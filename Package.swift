@@ -22,5 +22,9 @@ let package = Package(
             name: "sweep",
             dependencies: ["SweepAgent"]
         ),
+        .testTarget(
+            name: "SweepAgentTests",
+            dependencies: ["SweepAgent"]
+        ),
     ]
 )

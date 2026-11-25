@@ -21,10 +21,20 @@
       <span class="wordmark">sweep</span>
     </div>
 
-    <div class="topbar__pill">
-      <span class="status-dot" id="status-dot" aria-hidden="true"></span>
-      <span class="topbar__status" id="scan-status">扫描中</span>
-      <button class="pill-btn" id="rescan" type="button" disabled>重扫</button>
+    <div class="topbar__right">
+      <div class="topbar__pill topbar__pill--trash" id="trash-pill">
+        <svg class="trash-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.8 4.4h10.4M6.2 4.4V3.2a.8.8 0 0 1 .8-.8h2a.8.8 0 0 1 .8.8v1.2M4.8 6.4l.45 6.2a1 1 0 0 0 1 .9h3.5a1 1 0 0 0 1-.9l.45-6.2" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="topbar__status" id="trash-summary">废纸篓 --</span>
+        <button class="pill-btn pill-btn--caution" id="trash-open" type="button" disabled>清空废纸篓</button>
+      </div>
+
+      <div class="topbar__pill">
+        <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+        <span class="topbar__status" id="scan-status">扫描中</span>
+        <button class="pill-btn" id="rescan" type="button" disabled>重扫</button>
+      </div>
     </div>
   </header>
 
@@ -269,6 +279,36 @@
     <footer class="drawer__foot">
       <span class="drawer__sel" id="drawer-sel">已选 0 项 · 0 B</span>
       <button class="btn btn--primary" id="drawer-done" type="button">完成</button>
+    </footer>
+  </section>
+</div>
+
+<div class="modal" id="trash-modal" hidden aria-modal="true" role="dialog" aria-labelledby="trash-modal-title">
+  <div class="modal__backdrop" id="trash-backdrop"></div>
+  <section class="modal__panel">
+    <header class="modal__head">
+      <div class="drawer__eyebrow">
+        <span class="badge badge--neutral">~/.Trash</span>
+        <span class="badge badge--caution">永久删除 · 不可撤销</span>
+      </div>
+      <button class="icon-btn" id="trash-close" type="button" aria-label="关闭">✕</button>
+    </header>
+
+    <div class="modal__title-row">
+      <h2 class="modal__title" id="trash-modal-title">清空废纸篓</h2>
+      <span class="modal__totals" id="trash-modal-totals">0 项 · 0 B</span>
+    </div>
+
+    <div class="modal__warn" id="trash-modal-warn">
+      <span class="analysis-tag analysis-tag--warn">提醒</span>
+      <span id="trash-modal-warn-text">清空后将从磁盘永久删除废纸篓中的全部内容并释放空间；此前清理进入废纸篓的文件将无法通过「撤销」找回。</span>
+    </div>
+
+    <div class="trash-list" id="trash-list"></div>
+
+    <footer class="modal__foot">
+      <button class="btn btn--ghost" id="trash-cancel" type="button">取消</button>
+      <button class="btn btn--danger" id="trash-confirm" type="button" disabled>确认清空</button>
     </footer>
   </section>
 </div>

@@ -61,6 +61,10 @@ public enum WebApp {
             return apply(request.body)
         case ("POST", "/api/restore"):
             return restore(request.body)
+        case ("GET", "/api/trash"):
+            return trashStatus()
+        case ("POST", "/api/trash/empty"):
+            return emptyTrash(request.body)
         default:
             return .json(["error": "not found"], status: 404)
         }
@@ -336,6 +340,26 @@ public enum WebApp {
         do {
             let result = try Cleaner.restore(operationId: operationId)
             return .json(["restored": result.restored, "failed": result.failed])
+        } catch {
+            return .json(["error": error.localizedDescription], status: 400)
+        }
+    }
+
+    // MARK: - Trash
+
+    static func trashStatus() -> Response {
+        let summary = TrashStore.inspect(limit: 40)
+        return .json(summary.asDictionary())
+    }
+
+    static func emptyTrash(_ body: Data) -> Response {
+        let payload = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+        let digest = payload["digest"] as? String
+        do {
+            let result = try TrashStore.empty(expectedDigest: digest)
+            return .json(result.asDictionary())
+        } catch CleanError.trashAccessDenied {
+            return .json(["error": CleanError.trashAccessDenied.localizedDescription], status: 403)
         } catch {
             return .json(["error": error.localizedDescription], status: 400)
         }

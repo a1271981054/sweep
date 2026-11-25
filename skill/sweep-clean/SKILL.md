@@ -7,7 +7,7 @@ description: Clean a Mac through the sweep MCP tools (Sweep's scan engine) with 
 
 把清理做成**看得见、可撤销**的流程：扫描 → 出图 → 计划（带 digest）→ 用户同意 → 执行 → 结果图 → 可撤销。
 
-工具来自 `sweep` MCP（12 个），底层是 [Sweep](https://github.com/iliyami/Sweep) 的 `MacCleanKit`。
+工具来自 `sweep` MCP（14 个），底层是 [Sweep](https://github.com/iliyami/Sweep) 的 `MacCleanKit`。
 
 ## 铁律
 
@@ -125,9 +125,11 @@ restore_clean(operation_id: "<O>")
 
 在废纸篓被清空之前有效。
 
-### 9. 收尾
+### 9. 收尾与废纸篓清空
 
-必须说清：**移入废纸篓不等于释放空间**，清空废纸篓才真正回收，而清空后无法撤销。不要替用户清空废纸篓。
+必须说清：**移入废纸篓不等于释放空间**，清空废纸篓才真正回收，而清空后无法撤销。
+
+除非用户明确要求「清空废纸篓」，否则**绝不主动替用户清空**；若用户明确要清空，必须先调 `trash_report` 展示待永久删除的数量、体积和主要项目，拿到用户二次确认并核对 `digest` 后再调用 `empty_trash(digest)`。
 
 ## 失败与边界
 
@@ -161,4 +163,4 @@ restore_clean(operation_id: "<O>")
 - 不把 `du`/`rm` 当成 sweep 的替代（要恢复能力就走 `plan_clean → apply_clean`）；
 - 不删 `.git`、不删 Gradle 发行包里的单个 jar 这类会破坏完整性的东西；
 - 不在 `auto` 模式下碰用户文件；
-- 不承诺“永久删除”——本工具只进废纸篓。
+- 未经用户明确要求并核对 `trash_report` 返回的 `digest`，不调用 `empty_trash` 永久删除文件。
