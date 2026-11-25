@@ -31,21 +31,36 @@ public enum AgentPaths {
 // MARK: - Snapshots
 
 public enum SnapshotStore {
+    public static func uniqueURL(module: String) -> URL {
+        AgentPaths.ensure()
+        let stamp = Int(Date().timeIntervalSince1970)
+        var candidate = AgentPaths.snapshots.appendingPathComponent("\(module)-\(stamp).json")
+        if FileManager.default.fileExists(atPath: candidate.path) {
+            let suffix = UUID().uuidString.prefix(4).lowercased()
+            candidate = AgentPaths.snapshots.appendingPathComponent("\(module)-\(stamp)-\(suffix).json")
+        }
+        return candidate
+    }
+
+    public static func write(to url: URL, entries: [ScanEntry]) -> Bool {
+        guard !entries.isEmpty else { return false }
+        AgentPaths.ensure()
+        guard let data = try? JSONEncoder().encode(entries) else { return false }
+        do {
+            try data.write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Persists the full candidate list so a later plan can only reference
     /// entries this process actually found. Returns the file path.
     public static func write(module: String, entries: [ScanEntry]) -> String? {
         guard !entries.isEmpty else { return nil }
-        AgentPaths.ensure()
-        let stamp = Int(Date().timeIntervalSince1970)
-        let url = AgentPaths.snapshots.appendingPathComponent("\(module)-\(stamp).json")
-        guard let data = try? JSONEncoder().encode(entries) else { return nil }
-        do {
-            try data.write(to: url)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return url.path
-        } catch {
-            return nil
-        }
+        let url = uniqueURL(module: module)
+        return write(to: url, entries: entries) ? url.path : nil
     }
 }
 
@@ -199,7 +214,20 @@ public struct OperationRecord: Codable, Sendable {
     public let items: [OperationItem]
 }
 
+public struct OperationSummary: Codable, Sendable {
+    public let id: String
+    public let createdAt: String
+    public let okCount: Int
+    public let failCount: Int
+    public let bytes: UInt64
+}
+
 public enum OperationLog {
+    private static let cacheLock = NSLock()
+    private static var cachedMtime: Date?
+    private static var cachedSize: UInt64 = 0
+    private static var cachedSummaries: [OperationSummary] = []
+
     public static func append(_ record: OperationRecord) throws {
         AgentPaths.ensure()
         let encoder = JSONEncoder()
@@ -214,6 +242,36 @@ public enum OperationLog {
         defer { try? handle.close() }
         try handle.seekToEnd()
         try handle.write(contentsOf: line)
+
+        cacheLock.lock()
+        cachedMtime = nil
+        cacheLock.unlock()
+    }
+
+    public static func summaries() -> [OperationSummary] {
+        let url = AgentPaths.operations
+        let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let mtime = vals?.contentModificationDate
+        let size = UInt64(vals?.fileSize ?? 0)
+
+        cacheLock.lock()
+        if let mtime, cachedMtime == mtime, cachedSize == size {
+            let hit = cachedSummaries
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        let parsed = data.split(separator: 0x0A).compactMap { try? decoder.decode(OperationSummary.self, from: Data($0)) }
+
+        cacheLock.lock()
+        cachedMtime = mtime
+        cachedSize = size
+        cachedSummaries = parsed
+        cacheLock.unlock()
+        return parsed
     }
 
     public static func all() -> [OperationRecord] {

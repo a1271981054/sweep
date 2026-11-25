@@ -13,3 +13,7 @@ dsh-bundle/cordis.patch.yml
 
 # macOS
 .DS_Store
+
+# Design files & internal drafts
+*.fig
+docs/UI-REDESIGN.md

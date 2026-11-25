@@ -1,12 +1,20 @@
 import Foundation
+import Darwin
 import MacCleanKit
 
 /// Project junk: dependency and build folders inside code projects.
-/// The classification itself is Sweep's `ProjectJunkFinder`; this type only
-/// builds the directory tree it expects (parent-child linkage + `.gitignore`).
+/// The classification itself is Sweep's `ProjectJunkFinder`; this type builds
+/// the directory tree with fast concurrent POSIX traversal, identifies valid
+/// junk folders first, and only sizes confirmed targets in parallel.
 public struct ProjectJunkScanner {
     static let junkNames: Set<String> = [
         "node_modules", ".next", "dist", "target", "build", ".venv", "venv", "Pods",
+    ]
+
+    private static let packageSuffixes: [String] = [
+        ".app", ".framework", ".bundle", ".xcodeproj", ".xcworkspace",
+        ".photoslibrary", ".photolibrary", ".musiclibrary", ".tvlibrary",
+        ".fcpbundle", ".imovielibrary", ".logicx", ".pages", ".numbers", ".key",
     ]
 
     public init() {}
@@ -14,93 +22,174 @@ public struct ProjectJunkScanner {
     public func scan(
         roots: [URL],
         maxDepth: Int = 6,
-        limit: Int
+        limit: Int,
+        onProgress: ((Double, String, String, UInt64, Int) -> Void)? = nil
     ) async -> (groups: [ScanGroup], items: [ProjectJunkItem], nodes: Int) {
-        var nodes: [ProjectTreeNode] = []
-        var seen = Set<String>()
-
+        let fm = FileManager.default
+        var rootPathsSeen = Set<String>()
+        var existingRoots: [URL] = []
         for root in roots {
-            let fm = FileManager.default
-            guard fm.fileExists(atPath: root.path(percentEncoded: false)) else { continue }
+            let p = Self.normalize(root.path(percentEncoded: false))
+            if rootPathsSeen.insert(p).inserted && fm.fileExists(atPath: p) && !FileWalker.isPermissionDenied(root) {
+                existingRoots.append(URL(fileURLWithPath: p, isDirectory: true))
+            }
+        }
 
+        onProgress?(0.04, "扫描项目目录", "并发检索项目树", 0, 0)
+
+        var nodes: [ProjectTreeNode] = []
+        var subtrees: [(path: String, depth: Int)] = []
+
+        for root in existingRoots {
+            if Task.isCancelled { break }
             let rootPath = Self.normalize(root.path(percentEncoded: false))
-            if seen.insert(rootPath).inserted {
-                let rootChildren = (try? fm.contentsOfDirectory(atPath: rootPath)) ?? []
-                let rootModified = try? root.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                nodes.append(
-                    ProjectTreeNode(
-                        path: rootPath,
-                        bytes: 0,
-                        modified: rootModified,
-                        childNames: rootChildren,
-                        gitignoreLines: rootChildren.contains(".gitignore") ? Self.gitignoreLines(in: rootPath) : []
-                    )
+            let inspection = Self.readDirectoryPOSIX(path: rootPath, readChildrenOfJunk: true)
+            nodes.append(
+                ProjectTreeNode(
+                    path: rootPath,
+                    bytes: 0,
+                    modified: inspection.modified,
+                    childNames: inspection.childNames,
+                    gitignoreLines: inspection.hasGitignore ? Self.gitignoreLines(in: rootPath) : []
                 )
+            )
+            for subName in inspection.subdirNames {
+                let isJunk = Self.junkNames.contains(subName)
+                if !isJunk && subName.hasPrefix(".") { continue }
+                if !isJunk && Self.isPackageDirectoryName(subName) { continue }
+                subtrees.append((path: "\(rootPath)/\(subName)", depth: 1))
+            }
+        }
+
+        var walkedDirs = nodes.count
+
+        let collectedBatches = await withTaskGroup(of: [ProjectTreeNode].self) { group in
+            let maxConcurrent = min(8, max(2, ProcessInfo.processInfo.activeProcessorCount))
+            var nextIdx = 0
+
+            func enqueue(_ item: (path: String, depth: Int)) {
+                group.addTask {
+                    var localNodes: [ProjectTreeNode] = []
+                    Self.walkSubtree(
+                        path: item.path,
+                        depth: item.depth,
+                        maxDepth: maxDepth,
+                        into: &localNodes
+                    )
+                    return localNodes
+                }
             }
 
-            let enumerator = fm.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
-                options: [.skipsPackageDescendants]
-            )
-            while let object = enumerator?.nextObject() {
-                guard let url = object as? URL else { continue }
-                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                guard values?.isDirectory == true, values?.isSymbolicLink != true else { continue }
+            for _ in 0..<min(maxConcurrent, subtrees.count) {
+                enqueue(subtrees[nextIdx])
+                nextIdx += 1
+            }
 
-                let path = Self.normalize(url.path(percentEncoded: false))
-                let relative = path.dropFirst(root.path(percentEncoded: false).count)
-                let depth = relative.components(separatedBy: "/").count - 1
+            var all: [[ProjectTreeNode]] = []
+            while let batch = await group.next() {
+                all.append(batch)
+                walkedDirs += batch.count
 
-                let name = url.lastPathComponent
-                let isJunkName = Self.junkNames.contains(name)
+                let frac = 0.05 + 0.45 * (1.0 - exp(-Double(walkedDirs) / 1200.0))
+                onProgress?(frac, "扫描项目目录", "已遍历 \(walkedDirs) 目录", 0, 0)
 
-                // Never descend into a junk folder; it is a leaf candidate.
-                if isJunkName {
-                    enumerator?.skipDescendants()
-                } else if depth >= maxDepth {
-                    enumerator?.skipDescendants()
-                    continue
-                } else if ScanTarget.isHiddenEntry(url) {
-                    // Hidden folders hold app/tool state, not project junk.
-                    enumerator?.skipDescendants()
-                    continue
+                if nextIdx < subtrees.count && !Task.isCancelled {
+                    enqueue(subtrees[nextIdx])
+                    nextIdx += 1
+                }
+            }
+            return all
+        }
+
+        var seen = Set<String>()
+        seen.reserveCapacity(walkedDirs + 64)
+        var dedupedNodes: [ProjectTreeNode] = []
+        dedupedNodes.reserveCapacity(walkedDirs + 64)
+
+        for node in nodes where seen.insert(node.path).inserted {
+            dedupedNodes.append(node)
+        }
+        for batch in collectedBatches {
+            for node in batch where seen.insert(node.path).inserted {
+                dedupedNodes.append(node)
+            }
+        }
+
+        onProgress?(0.52, "整理项目列表", "\(dedupedNodes.count) 目录", 0, 0)
+
+        // Filter valid project junk folders first (marker + .gitignore rules) before sizing them.
+        let candidates = ProjectJunkFinder.find(nodes: dedupedNodes)
+        guard !candidates.isEmpty else { return ([], [], dedupedNodes.count) }
+
+        let totalCandidates = candidates.count
+        var doneCount = 0
+        var foundBytes: UInt64 = 0
+        var foundCount = 0
+
+        let sizedItems = await withTaskGroup(of: ProjectJunkItem.self) { group in
+            let maxConcurrent = min(8, max(2, ProcessInfo.processInfo.activeProcessorCount))
+            var nextIdx = 0
+
+            func enqueueCandidate(_ item: ProjectJunkItem) {
+                group.addTask {
+                    let bytes = Self.directorySize(item.path)
+                    return ProjectJunkItem(
+                        path: item.path,
+                        projectPath: item.projectPath,
+                        kind: item.kind,
+                        bytes: bytes,
+                        projectModified: item.projectModified
+                    )
+                }
+            }
+
+            for _ in 0..<min(maxConcurrent, totalCandidates) {
+                enqueueCandidate(candidates[nextIdx])
+                nextIdx += 1
+            }
+
+            var out: [ProjectJunkItem] = []
+            out.reserveCapacity(totalCandidates)
+
+            while let measured = await group.next() {
+                out.append(measured)
+
+                doneCount += 1
+                if measured.bytes > 0 {
+                    foundBytes &+= measured.bytes
+                    foundCount += 1
                 }
 
-                guard seen.insert(path).inserted else { continue }
+                let label = "\((measured.projectPath as NSString).lastPathComponent)/\((measured.path as NSString).lastPathComponent)"
+                let frac = 0.55 + 0.40 * (Double(doneCount) / Double(max(totalCandidates, 1)))
+                onProgress?(frac, "计算项目依赖", label, foundBytes, foundCount)
 
-                let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-                let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                let bytes = isJunkName ? Self.directorySize(path) : 0
-
-                nodes.append(
-                    ProjectTreeNode(
-                        path: path,
-                        bytes: bytes,
-                        modified: modified,
-                        childNames: children,
-                        gitignoreLines: children.contains(".gitignore") ? Self.gitignoreLines(in: path) : []
-                    )
-                )
+                if nextIdx < totalCandidates && !Task.isCancelled {
+                    enqueueCandidate(candidates[nextIdx])
+                    nextIdx += 1
+                }
             }
+            return out
+        }
+
+        let items = sizedItems.sorted { lhs, rhs in
+            let left = lhs.projectModified ?? .distantFuture
+            let right = rhs.projectModified ?? .distantFuture
+            if left != right { return left < right }
+            if lhs.bytes != rhs.bytes { return lhs.bytes > rhs.bytes }
+            return lhs.path < rhs.path
         }
 
         if ProcessInfo.processInfo.environment["SWEEP_DEBUG"] != nil {
-            let byPath = Dictionary(nodes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
-            for node in nodes where Self.junkNames.contains((node.path as NSString).lastPathComponent) {
-                let parentPath = (node.path as NSString).deletingLastPathComponent
-                let parent = byPath[parentPath]
-                let kids = parent.map { Set($0.childNames) } ?? []
-                let markers = ["package.json", "Cargo.toml", "pyproject.toml", "build.gradle", "pom.xml", "Podfile"]
-                    .filter { kids.contains($0) }
-                let hasCfg = node.childNames.contains("pyvenv.cfg")
+            let byPath = Dictionary(dedupedNodes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            for item in items {
+                let parent = byPath[item.projectPath]
                 FileHandle.standardError.write(Data(
-                    "debug: \(node.path)\n        parentInTable=\(parent != nil) siblings=\(kids.count) markers=\(markers) pyvenv=\(hasCfg)\n".utf8))
+                    "debug: \(item.path) bytes=\(item.bytes) parentFound=\(parent != nil)\n".utf8))
             }
         }
 
-        let items = ProjectJunkFinder.find(nodes: nodes)
-        guard !items.isEmpty else { return ([], [], nodes.count) }
+        onProgress?(0.98, "整理项目列表", "\(items.count) 项", foundBytes, foundCount)
 
         let entries = items
             .sorted { $0.bytes > $1.bytes }
@@ -122,7 +211,112 @@ public struct ProjectJunkScanner {
             bytes: items.reduce(0) { $0 &+ $1.bytes },
             top: Array(entries)
         )
-        return ([group], items, nodes.count)
+        return ([group], items, dedupedNodes.count)
+    }
+
+    private struct DirInspection {
+        let modified: Date?
+        let childNames: [String]
+        let subdirNames: [String]
+        let hasGitignore: Bool
+    }
+
+    private static func walkSubtree(
+        path: String,
+        depth: Int,
+        maxDepth: Int,
+        into nodes: inout [ProjectTreeNode]
+    ) {
+        if Task.isCancelled { return }
+        let name = (path as NSString).lastPathComponent
+        let isJunk = Self.junkNames.contains(name)
+
+        if !isJunk && depth >= maxDepth {
+            return
+        }
+        if !isJunk && name.hasPrefix(".") {
+            return
+        }
+        if !isJunk && isPackageDirectoryName(name) {
+            return
+        }
+
+        // Only venv/.venv inspect childNames (for pyvenv.cfg); skip reading huge node_modules root entries.
+        let needChildren = !isJunk || name == ".venv" || name == "venv"
+        let inspection = readDirectoryPOSIX(path: path, readChildrenOfJunk: needChildren)
+
+        nodes.append(
+            ProjectTreeNode(
+                path: path,
+                bytes: 0,
+                modified: inspection.modified,
+                childNames: inspection.childNames,
+                gitignoreLines: (!isJunk && inspection.hasGitignore) ? Self.gitignoreLines(in: path) : []
+            )
+        )
+
+        if isJunk || depth >= maxDepth {
+            return
+        }
+
+        for childName in inspection.subdirNames {
+            let childIsJunk = Self.junkNames.contains(childName)
+            if !childIsJunk && childName.hasPrefix(".") { continue }
+            if !childIsJunk && isPackageDirectoryName(childName) { continue }
+            walkSubtree(
+                path: "\(path)/\(childName)",
+                depth: depth + 1,
+                maxDepth: maxDepth,
+                into: &nodes
+            )
+        }
+    }
+
+    private static func readDirectoryPOSIX(path: String, readChildrenOfJunk: Bool) -> DirInspection {
+        var dirStat = stat()
+        let modified: Date? = lstat(path, &dirStat) == 0
+            ? Date(timeIntervalSince1970: Double(dirStat.st_mtimespec.tv_sec) + Double(dirStat.st_mtimespec.tv_nsec) * 1e-9)
+            : nil
+
+        guard readChildrenOfJunk, let dir = opendir(path) else {
+            return DirInspection(modified: modified, childNames: [], subdirNames: [], hasGitignore: false)
+        }
+        defer { closedir(dir) }
+        let dfd = dirfd(dir)
+
+        var childNames: [String] = []
+        var subdirNames: [String] = []
+        var hasGitignore = false
+
+        while let dp = readdir(dir) {
+            let entryName = withUnsafePointer(to: &dp.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+                    String(cString: $0)
+                }
+            }
+            if entryName == "." || entryName == ".." { continue }
+            childNames.append(entryName)
+            if entryName == ".gitignore" { hasGitignore = true }
+
+            let dType = Int32(dp.pointee.d_type)
+            if dType == DT_DIR {
+                subdirNames.append(entryName)
+            } else if dType == DT_UNKNOWN {
+                var st = stat()
+                if fstatat(dfd, entryName, &st, AT_SYMLINK_NOFOLLOW) == 0,
+                   (st.st_mode & S_IFMT) == S_IFDIR {
+                    subdirNames.append(entryName)
+                }
+            }
+        }
+
+        return DirInspection(modified: modified, childNames: childNames, subdirNames: subdirNames, hasGitignore: hasGitignore)
+    }
+
+    private static func isPackageDirectoryName(_ name: String) -> Bool {
+        guard name.contains(".") else { return false }
+        let lower = name.lowercased()
+        return packageSuffixes.contains { lower.hasSuffix($0) }
     }
 
     /// Directory URLs carry a trailing slash; the finder links nodes by exact
@@ -135,22 +329,7 @@ public struct ProjectJunkScanner {
     }
 
     static func directorySize(_ path: String) -> UInt64 {
-        let url = URL(fileURLWithPath: path)
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.fileSizeKey, .totalFileSizeKey, .isDirectoryKey],
-            options: [.skipsPackageDescendants]
-        ) else { return 0 }
-
-        var total: UInt64 = 0
-        while let object = enumerator.nextObject() {
-            guard let fileURL = object as? URL,
-                  let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .totalFileSizeKey, .isDirectoryKey])
-            else { continue }
-            if values.isDirectory == true { continue }
-            total &+= UInt64(values.fileSize ?? 0)
-        }
-        return total
+        FileWalker.fastDirectorySize(path)
     }
 
     static func gitignoreLines(in directory: String) -> [String] {

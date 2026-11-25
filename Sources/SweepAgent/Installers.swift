@@ -26,17 +26,23 @@ public struct InstallersScanner {
         roots: [URL],
         olderThanDays: Double = 30,
         notInstalledOnly: Bool = false,
-        limit: Int = 40
+        limit: Int = 40,
+        onProgress: ((Double, String, String, UInt64, Int) -> Void)? = nil
     ) async -> Result {
         let fileManager = FileManager.default
+        onProgress?(0.15, "安装包", "比对已安装应用", 0, 0)
         let installed = Self.installedApps()
         let cutoff = Date().addingTimeInterval(-olderThanDays * 86_400)
 
         var stale: [ScanEntry] = []
         var missing: [ScanEntry] = []
-        var denied: [URL] = []
+        let denied: [URL] = []
+        var foundBytes: UInt64 = 0
+        var foundCount = 0
+        let rootTotal = max(roots.count, 1)
 
-        for root in roots {
+        for (idx, root) in roots.enumerated() {
+            onProgress?(0.25 + 0.65 * (Double(idx) / Double(rootTotal)), "安装包", root.lastPathComponent, foundBytes, foundCount)
             guard fileManager.fileExists(atPath: root.path(percentEncoded: false)) else { continue }
             guard let enumerator = fileManager.enumerator(
                 at: root,
@@ -82,11 +88,17 @@ public struct InstallersScanner {
 
                 if state.category == "uninstalled_installers" {
                     missing.append(entry)
+                    foundBytes &+= bytes
+                    foundCount += 1
                 } else if let modified, modified < cutoff {
                     stale.append(entry)
+                    foundBytes &+= bytes
+                    foundCount += 1
                 }
             }
         }
+
+        onProgress?(0.95, "安装包", "整理结果", foundBytes, foundCount)
 
         var groups: [ScanGroup] = []
         if !stale.isEmpty {
@@ -202,20 +214,7 @@ public struct InstallersScanner {
     }
 
     static func directorySize(_ url: URL) -> UInt64 {
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
-            options: [.skipsPackageDescendants]
-        ) else { return 0 }
-        var total: UInt64 = 0
-        while let object = enumerator.nextObject() {
-            guard let fileURL = object as? URL,
-                  let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
-                  values.isDirectory != true
-            else { continue }
-            total &+= UInt64(values.fileSize ?? 0)
-        }
-        return total
+        FileWalker.fastDirectorySize(url.path(percentEncoded: false))
     }
 
     static func group(category: String, label: String, entries: [ScanEntry], limit: Int) -> ScanGroup {

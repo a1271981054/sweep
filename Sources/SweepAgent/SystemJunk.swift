@@ -79,28 +79,84 @@ public struct SystemJunkScanner {
 
     public func scan(
         categories: [any JunkCategory] = SystemJunkScanner.allCategories,
-        limit: Int
+        limit: Int,
+        onProgress: ((Double, String, String, UInt64, Int) -> Void)? = nil
     ) async -> (groups: [ScanGroup], denied: [URL], perCategory: [(ScanCategory, [FileItem])]) {
+        let total = max(categories.count, 1)
+        var completed = 0
+        var totalBytes: UInt64 = 0
+        var totalItems = 0
+
+        onProgress?(0.02, "系统垃圾", "0/\(total)", 0, 0)
+
+        let outcomes = await withTaskGroup(of: (Int, ScanCategory, ScanGroup?, [URL], [FileItem]).self) { group in
+            let maxConcurrent = min(6, max(2, ProcessInfo.processInfo.activeProcessorCount))
+            var nextIdx = 0
+
+            func enqueueNext(_ idx: Int) {
+                let category = categories[idx]
+                group.addTask {
+                    let result = await walker.scan(
+                        targets: category.targets,
+                        options: ScanWalkOptions(leafOnly: false, includeIdentity: false)
+                    )
+                    let bytes = FileWalker.leafBytes(of: result.items)
+                    let catLabel = CategoryLabels.label(category.scanCategory)
+                    let scanGroup: ScanGroup? = (!result.items.isEmpty || bytes > 0)
+                        ? ScanGroup(
+                            category: category.scanCategory.rawValue,
+                            label: catLabel,
+                            items: result.items.count,
+                            bytes: bytes,
+                            top: Util.entries(from: result.items, limit: limit, category: category.scanCategory.rawValue)
+                        )
+                        : nil
+                    return (idx, category.scanCategory, scanGroup, result.deniedPaths, result.items)
+                }
+            }
+
+            for _ in 0..<min(maxConcurrent, categories.count) {
+                enqueueNext(nextIdx)
+                nextIdx += 1
+            }
+
+            var ordered = Array<(category: ScanCategory, group: ScanGroup?, denied: [URL], items: [FileItem])?>(
+                repeating: nil,
+                count: categories.count
+            )
+
+            while let (idx, cat, scanGroup, catDenied, items) = await group.next() {
+                ordered[idx] = (cat, scanGroup, catDenied, items)
+
+                completed += 1
+                if let scanGroup {
+                    totalBytes &+= scanGroup.bytes
+                    totalItems += scanGroup.items
+                }
+
+                let catLabel = CategoryLabels.label(cat)
+                onProgress?(Double(completed) / Double(total), catLabel, "\(completed)/\(total)", totalBytes, totalItems)
+
+                if nextIdx < categories.count && !Task.isCancelled {
+                    enqueueNext(nextIdx)
+                    nextIdx += 1
+                }
+            }
+            return ordered
+        }
+
         var groups: [ScanGroup] = []
         var denied: [URL] = []
         var perCategory: [(ScanCategory, [FileItem])] = []
+        perCategory.reserveCapacity(categories.count)
 
-        for category in categories {
-            let result = await walker.scan(targets: category.targets)
-            denied.append(contentsOf: result.deniedPaths)
-            perCategory.append((category.scanCategory, result.items))
-
-            let bytes = FileWalker.leafBytes(of: result.items)
-            guard !result.items.isEmpty || bytes > 0 else { continue }
-            groups.append(
-                ScanGroup(
-                    category: category.scanCategory.rawValue,
-                    label: CategoryLabels.label(category.scanCategory),
-                    items: result.items.count,
-                    bytes: bytes,
-                    top: Util.entries(from: result.items, limit: limit, category: category.scanCategory.rawValue)
-                )
-            )
+        for entry in outcomes {
+            guard let entry else { continue }
+            denied.append(contentsOf: entry.denied)
+            perCategory.append((entry.category, entry.items))
+            if let g = entry.group {
+                groups.append(g)
+            }
         }
 
         groups.sort { $0.bytes > $1.bytes }

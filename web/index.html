@@ -8,40 +8,272 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<canvas id="grainient" class="grainient" aria-hidden="true"></canvas>
+<div class="grainient-scrim" aria-hidden="true"></div>
+
 <main class="shell">
-  <header class="bar">
-    <div class="wordmark">sweep</div>
-    <div class="disk">
-      <span class="disk__value" id="disk-free">--</span>
-      <span class="disk__meta" id="disk-used">--</span>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="36 18"/>
+        <circle cx="12" cy="12" r="2.5" fill="currentColor"/>
+      </svg>
+      <span class="wordmark">sweep</span>
+    </div>
+
+    <div class="topbar__pill">
+      <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+      <span class="topbar__status" id="scan-status">扫描中</span>
+      <button class="pill-btn" id="rescan" type="button" disabled>重扫</button>
     </div>
   </header>
 
-  <section class="gauge" aria-hidden="true">
-    <div class="gauge__fill" id="disk-bar"></div>
+  <section class="bento">
+    <!-- Widget 1: Disk Storage Dot-Matrix (Ref 2: 5.31/16 GB grid) -->
+    <article class="bento-card bento-disk" data-glow>
+      <div class="bento-card__top">
+        <div class="bento-card__title-wrap">
+          <span class="tag">存储矩阵</span>
+          <span class="tag tag--mono" id="disk-used">--</span>
+        </div>
+        <div class="bento-metric-inline">
+          <span class="bento-val bento-val--lg" id="disk-free">--</span>
+          <span class="bento-denom" id="disk-total">/ --</span>
+        </div>
+      </div>
+
+      <div class="dot-matrix" id="disk-matrix" aria-hidden="true"></div>
+
+      <div class="pip-row">
+        <div class="pip-item">
+          <span class="pip-bar pip-bar--used"></span>
+          <div class="pip-text">
+            <span class="pip-label">已用</span>
+            <span class="pip-val" id="disk-stat-used">--</span>
+          </div>
+        </div>
+        <div class="pip-item">
+          <span class="pip-bar pip-bar--junk"></span>
+          <div class="pip-text">
+            <span class="pip-label">可清</span>
+            <span class="pip-val" id="disk-stat-junk">--</span>
+          </div>
+        </div>
+        <div class="pip-item">
+          <span class="pip-bar pip-bar--purge"></span>
+          <div class="pip-text">
+            <span class="pip-label">可释</span>
+            <span class="pip-val" id="disk-stat-purge">--</span>
+          </div>
+        </div>
+        <div class="pip-item">
+          <span class="pip-bar pip-bar--free"></span>
+          <div class="pip-text">
+            <span class="pip-label">可用</span>
+            <span class="pip-val" id="disk-stat-free">--</span>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Widget 2: Cleanup Ring & Risk Bars (Ref 2 ring + Ref 3 macro bars + segmented strip) -->
+    <article class="bento-card bento-scan" data-glow>
+      <div class="bento-card__top">
+        <div class="bento-card__title-wrap">
+          <span class="tag">可清理</span>
+          <span class="tag tag--mono tag--accent" id="scan-pct">0%</span>
+          <span class="tag tag--mono" id="found-count">0 项</span>
+        </div>
+        <span class="bento-val bento-val--md" id="found-bytes">0 B</span>
+      </div>
+
+      <div class="scan-viz">
+        <div class="ring-box" aria-hidden="true">
+          <svg class="ring-svg" viewBox="0 0 84 84">
+            <circle class="ring-track" cx="42" cy="42" r="34"/>
+            <circle class="ring-arc ring-arc--safe" id="ring-safe" cx="42" cy="42" r="34"/>
+            <circle class="ring-arc ring-arc--confirm" id="ring-confirm" cx="42" cy="42" r="34"/>
+            <circle class="ring-arc ring-arc--caution" id="ring-caution" cx="42" cy="42" r="34"/>
+          </svg>
+          <div class="ring-center">
+            <span class="ring-center__label" id="ring-label">已选</span>
+            <span class="ring-center__val" id="ring-val">0 B</span>
+          </div>
+        </div>
+
+        <div class="risk-bars">
+          <div class="risk-bar-row">
+            <div class="risk-bar-meta">
+              <span class="risk-bar-name risk-bar-name--safe">推荐</span>
+              <span class="risk-bar-val" id="bar-safe-val">0 B</span>
+            </div>
+            <div class="mini-track"><div class="mini-fill mini-fill--safe" id="bar-safe-fill"></div></div>
+          </div>
+          <div class="risk-bar-row">
+            <div class="risk-bar-meta">
+              <span class="risk-bar-name risk-bar-name--confirm">确认</span>
+              <span class="risk-bar-val" id="bar-confirm-val">0 B</span>
+            </div>
+            <div class="mini-track"><div class="mini-fill mini-fill--confirm" id="bar-confirm-fill"></div></div>
+          </div>
+          <div class="risk-bar-row">
+            <div class="risk-bar-meta">
+              <span class="risk-bar-name risk-bar-name--caution">保留</span>
+              <span class="risk-bar-val" id="bar-caution-val">0 B</span>
+            </div>
+            <div class="mini-track"><div class="mini-fill mini-fill--caution" id="bar-caution-fill"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bento-scan__progress">
+        <div class="scan-stage-row">
+          <span class="scan-stage" id="scan-stage">准备扫描</span>
+          <span class="scan-mod-pills" id="mod-segments"></span>
+        </div>
+        <div class="gauge" aria-hidden="true">
+          <div class="gauge__fill" id="scan-bar"></div>
+        </div>
+      </div>
+    </article>
+
+    <!-- Widget 3: Live System Telemetry & Cleanup Activity (Ref 2 & 3 sparkline + activity grid) -->
+    <article class="bento-card bento-telemetry" data-glow>
+      <div class="bento-card__top">
+        <div class="bento-card__title-wrap">
+          <span class="tag">实时遥测</span>
+          <span class="tag tag--mono" id="agent-mode">--</span>
+        </div>
+        <span class="tag tag--mono" id="agent-fda">--</span>
+      </div>
+
+      <div class="telemetry-grid">
+        <div class="tele-block">
+          <div class="tele-head">
+            <span class="tele-name">CPU</span>
+            <span class="tele-val" id="cpu-val">--%</span>
+          </div>
+          <svg class="sparkline" id="cpu-spark" viewBox="0 0 120 34" preserveAspectRatio="none" aria-hidden="true">
+            <line class="spark-grid" x1="0" y1="17" x2="120" y2="17"/>
+            <polygon class="spark-area" id="cpu-area" points="0,34 120,34"/>
+            <polyline class="spark-line" id="cpu-line" points="0,32 120,32"/>
+          </svg>
+        </div>
+
+        <div class="tele-block">
+          <div class="tele-head">
+            <span class="tele-name">内存</span>
+            <span class="tele-val" id="mem-val">--</span>
+          </div>
+          <div class="mem-strip" id="mem-strip" aria-hidden="true"></div>
+          <div class="tele-sub" id="mem-sub">--</div>
+        </div>
+      </div>
+
+      <div class="history-block">
+        <div class="history-head">
+          <span class="tele-name">累计释放 <strong class="history-total" id="hist-total">0 B</strong></span>
+          <span class="tele-sub" id="hist-ops">0 次</span>
+        </div>
+        <div class="activity-bars" id="hist-bars" aria-hidden="true"></div>
+      </div>
+    </article>
   </section>
 
-  <section class="panel" id="panel" aria-live="polite">
-    <div class="skeleton" id="skeleton">
-      <div class="skeleton__row"></div>
-      <div class="skeleton__row"></div>
-      <div class="skeleton__row"></div>
-    </div>
+  <section class="workspace">
+    <aside class="rail" id="rail" aria-label="分类筛选"></aside>
+
+    <section class="board" id="panel" aria-live="polite">
+      <div class="board-bar">
+        <input class="board-search" id="board-search" type="search" placeholder="筛选类别、项目或文件名…" autocomplete="off">
+        <div class="board-bar__right">
+          <div class="chip-group" id="board-sort">
+            <button class="chip is-active" type="button" data-sort="bytes">体积</button>
+            <button class="chip" type="button" data-sort="items">数量</button>
+            <button class="chip" type="button" data-sort="risk">建议</button>
+          </div>
+          <span class="tag tag--mono" id="board-meta">0 类</span>
+        </div>
+      </div>
+
+      <div class="grid" id="grid">
+        <div class="skeleton__card"></div>
+        <div class="skeleton__card"></div>
+        <div class="skeleton__card"></div>
+        <div class="skeleton__card"></div>
+      </div>
+    </section>
   </section>
 
   <footer class="action" id="action">
     <div class="action__sum">
+      <span class="action__tag">已选</span>
       <span class="action__bytes" id="sum-bytes">0 B</span>
-      <span class="action__count" id="sum-count">未选择</span>
+      <span class="action__count" id="sum-count">0 项</span>
     </div>
     <div class="action__controls">
-      <button class="btn btn--ghost" id="undo" hidden>撤销</button>
-      <button class="btn btn--primary" id="clean" disabled>清理</button>
+      <button class="btn btn--ghost" id="select-all" type="button" disabled>全选</button>
+      <button class="btn btn--ghost" id="undo" type="button" hidden>撤销</button>
+      <button class="btn btn--primary" id="clean" type="button" disabled>清理</button>
     </div>
   </footer>
-
-  <div class="toast" id="toast" hidden></div>
 </main>
+
+<div class="drawer" id="drawer" hidden aria-modal="true" role="dialog" aria-labelledby="drawer-title">
+  <div class="drawer__backdrop" id="drawer-backdrop"></div>
+  <section class="drawer__panel">
+    <header class="drawer__head">
+      <div class="drawer__titles">
+        <div class="drawer__eyebrow">
+          <span class="badge badge--neutral" id="drawer-parent">--</span>
+          <span class="badge" id="drawer-risk">--</span>
+        </div>
+        <h2 class="drawer__title" id="drawer-title">--</h2>
+      </div>
+      <div class="drawer__head-right">
+        <span class="drawer__totals" id="drawer-totals">0 项 · 0 B</span>
+        <button class="icon-btn" id="drawer-close" type="button" aria-label="关闭">✕</button>
+      </div>
+    </header>
+
+    <div class="drawer__tools">
+      <div class="search-box">
+        <input class="search-input" id="drawer-search" type="search" placeholder="搜索文件名、路径或用途…" autocomplete="off">
+      </div>
+      <div class="drawer__filters">
+        <div class="chip-group" id="drawer-risk-chips">
+          <button class="chip is-active" type="button" data-risk="">全部</button>
+          <button class="chip" type="button" data-risk="safe">推荐清理</button>
+          <button class="chip" type="button" data-risk="confirm">按需确认</button>
+          <button class="chip" type="button" data-risk="caution">谨慎保留</button>
+        </div>
+        <div class="drawer__tool-actions">
+          <select class="sort-select" id="drawer-sort" aria-label="排序">
+            <option value="size">按大小</option>
+            <option value="modified">按时间</option>
+            <option value="name">按名称</option>
+          </select>
+          <button class="pill-btn" id="drawer-select-all" type="button">全选此项</button>
+          <button class="pill-btn" id="drawer-clear-all" type="button">取消此项</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="drawer__body" id="drawer-body">
+      <div class="file-list" id="drawer-list"></div>
+      <div class="drawer__more" id="drawer-more" hidden>
+        <button class="btn btn--ghost" id="drawer-load-more" type="button">加载更多</button>
+      </div>
+    </div>
+
+    <footer class="drawer__foot">
+      <span class="drawer__sel" id="drawer-sel">已选 0 项 · 0 B</span>
+      <button class="btn btn--primary" id="drawer-done" type="button">完成</button>
+    </footer>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
 <script src="/app.js"></script>
 </body>
 </html>

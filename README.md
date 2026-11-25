@@ -2,7 +2,7 @@
 
 把第三方开源扫描引擎（`MacCleanKit`，BSD-3）包装成一个**结构化、可撤销、可被 agent 调用**的本地工具：CLI + MCP server + DSH bundle。引擎来源与许可声明见 [NOTICE](NOTICE.md)。
 
-当前版本 **0.2.0**（M2）：扫描、清理、撤销、三种自主度、四类客户端接入。
+当前版本 **0.3.0**：扫描、清理、撤销、三种自主度、本地 Web 清理界面、四类 MCP 客户端接入。
 
 ## 安装
 
@@ -16,14 +16,14 @@ SWEEP_SKIP_HELPER=1 ./install.sh  # 不装 FDA helper
 
 ```bash
 ./scripts/package.sh
-# → dist/sweep-0.2.0-macos-universal.tar.gz (2.5 MB，x86_64 + arm64) + .sha256
+# → dist/sweep-0.3.0-macos-universal.tar.gz（x86_64 + arm64）+ .sha256
 ```
 
 对方拿到后：
 
 ```bash
-tar xzf sweep-0.2.0-macos-universal.tar.gz
-cd sweep-0.2.0-macos-universal
+tar xzf sweep-0.3.0-macos-universal.tar.gz
+cd sweep-0.3.0-macos-universal
 ./install.sh
 ```
 
@@ -59,9 +59,13 @@ cd sweep-0.2.0-macos-universal
 sweep ui      # → http://127.0.0.1:47901/
 ```
 
-由 helper（持完全磁盘访问权限）直接服务的本地页面，一次跑完系统垃圾、项目垃圾、重复文件、安装包四类扫描；勾选后一次点击完成 `plan → apply`，附带撤销。
+由 helper（持完全磁盘访问权限）直接服务的本地 Web 工作台：
 
-页面资源在 `~/.local/share/sweep/web/`，改界面不需要重编译（重编译会更换 helper 签名、需要重新授权）。
+- **顶部三联遥测 Bento**：存储矩阵点阵图（已用 / 可清 / 可释 / 可用）、可清理三色环与分级分布、`GET /api/metrics` 实时系统遥测（CPU / 内存 / 累计释放记录）；
+- **流式并发扫描**：在 helper 进程内并发扫描系统垃圾、项目垃圾、重复文件与安装包，扫描中实时产出子类别卡片，无需等待 100% 即可随时勾选清理；
+- **智能分类与文件明细抽屉**：`FileAdvisor` 为文件提供「推荐清理 / 按需确认 / 谨慎保留」分级与逐条**用途及清理建议**；整卡可点击勾选，`全选` 一键选中当前可见项，点击 `全部文件 ›` 打开右侧明细抽屉（`GET /api/snapshot` 内存索引分页，支持关键词搜索、风险过滤与排序）。
+
+页面静态资源放在 `~/.local/share/sweep/web/`，修改前端后运行 `./scripts/deploy-web.sh` 即可刷新生效，不需要重编译或重新授予完全磁盘访问权限。
 
 ## 图片视图
 
@@ -156,7 +160,7 @@ sweep fda                # 看当前权限与 helper 状态
 - 上游把 `TargetedScanner` 放在 app target，本仓库按同语义复刻（`Walker.swift`）；后续可 PR 上游挪进 kit。
 - 目录 URL 的 `path` 带结尾斜杠，节点表按精确路径匹配，`ProjectJunkScan.normalize` 负责归一化。
 - 只清理用户空间；`/Library` 等需要 root 的项目只报告不处理。
-- 扫描耗时：系统垃圾 ~35s（11.8 万项）。MCP 侧用 `scan_start` → 子进程后台跑 → `scan_status` 轮询，避免请求超时；`scan_large_files` 等快模块仍同步。
+- 扫描性能优化：`FileWalker` 对纯文件叶节点采用 POSIX `fts` 快速遍历并支持多目标并发；`ScanJobs` 在 helper 进程内并发跑各模块并与 `SnapshotCache` 内存索引配合，`/api/snapshot` 分页按需生成用途与建议文本，减少重复磁盘 I/O。
 - **移入废纸篓不等于释放空间**：需要在访达里清空废纸篓才真正回收，而清空后 `restore_clean` 也就无法还原了。
 
 ## 目录
@@ -165,15 +169,24 @@ sweep fda                # 看当前权限与 helper 状态
 Package.swift
 install.sh
 Sources/SweepAgent/
-  Walker.swift          遍历器（对应上游 TargetedScanner）
-  SystemJunk.swift      21 个分类
-  UserFiles.swift       大文件 / 旧文件 / 重复文件
-  ProjectJunkScan.swift 项目树 + 分类
-  Operations.swift      快照 / 计划 / 废纸篓 / 审计日志 / 三种模式
-  Safety.swift          受保护路径 / digest / 预算
-  MCPServer.swift       stdio MCP（11 个工具）
-  CLI.swift             子命令
+  Walker.swift            并发文件遍历与 POSIX fts 快速叶节点扫描
+  SystemJunk.swift        系统垃圾扫描与分类
+  UserFiles.swift         大文件 / 旧文件 / 重复文件
+  ProjectJunkScan.swift   项目依赖与构建产物扫描
+  Installers.swift        旧安装包与磁盘映像检测
+  FileAdvisor.swift       子类别归类、风险分级与用途/建议生成
+  SystemMetrics.swift     磁盘 / CPU / 内存与历史释放遥测
+  ProgressReporter.swift  子进程流式进度输出
+  StatusServer.swift      helper 本地服务状态页
+  WebApp.swift            Web 清理界面 API、并发扫描调度与快照缓存
+  Operations.swift        快照 / 计划 / 废纸篓 / 审计日志 / 三种模式
+  Safety.swift            受保护路径 / digest / 预算
+  MCPServer.swift         stdio MCP（11 个工具）
+  CLI.swift               子命令
 Sources/sweep/main.swift
-dsh-bundle/             DSH config-only bundle（含 locale、图标、详情文档）
-vendor/               上游扫描引擎源码（BSD-3，见 NOTICE.md）
+web/                      Grainient 暗色玻璃态 Web UI（HTML / CSS / JS）
+scripts/                  deploy-web.sh / package.sh / vendor-scrub.sh
+dsh-bundle/               DSH config-only bundle（含 locale、图标、详情文档）
+skill/sweep-clean/        Agent 清理工作流 skill
+vendor/                   上游扫描引擎源码（BSD-3，见 NOTICE.md）
 ```

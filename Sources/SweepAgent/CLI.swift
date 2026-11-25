@@ -80,8 +80,23 @@ public enum CLIRunner {
         print("  可用     \(Util.bytes(available))")
     }
 
-    static func scan(module: String, options: Options) async {
-        let started = Date()
+    public struct ModuleScanOutput: Sendable {
+        public let module: String
+        public let groups: [ScanGroup]
+        public let entries: [ScanEntry]
+        public let deniedPaths: [URL]
+        public let warnings: [String]
+    }
+
+    public static func executeModule(
+        module: String,
+        limit: Int = 12,
+        roots: [String] = [],
+        minSizeMB: UInt64 = 200,
+        days: Double = 365,
+        depth: Int = 6,
+        onProgress: (@Sendable (Double, String, String, UInt64, Int) -> Void)? = nil
+    ) async -> ModuleScanOutput? {
         var groups: [ScanGroup] = []
         var denied: [URL] = []
         var warnings: [String] = []
@@ -89,7 +104,7 @@ public enum CLIRunner {
 
         switch module {
         case "system-junk", "junk":
-            let (g, d, perCategory) = await SystemJunkScanner().scan(limit: options.limit)
+            let (g, d, perCategory) = await SystemJunkScanner().scan(limit: limit, onProgress: onProgress)
             groups = g; denied = d
             allEntries = perCategory.flatMap { pair in
                 makeEntries(pair.1, limit: 100_000, category: pair.0.rawValue)
@@ -97,9 +112,10 @@ public enum CLIRunner {
 
         case "project-junk", "projects":
             let (g, items, nodes) = await ProjectJunkScanner().scan(
-                roots: resolve(options.roots, default: DefaultRoots.projects),
-                maxDepth: options.depth,
-                limit: options.limit
+                roots: resolve(roots, default: DefaultRoots.projects),
+                maxDepth: depth,
+                limit: limit,
+                onProgress: onProgress
             )
             groups = g
             allEntries = items.map {
@@ -116,9 +132,9 @@ public enum CLIRunner {
 
         case "large-files", "large":
             let (g, d, items) = await UserFilesScanner().largeFiles(
-                roots: resolve(options.roots, default: DefaultRoots.userFiles),
-                minSize: options.minSizeMB * 1024 * 1024,
-                limit: options.limit
+                roots: resolve(roots, default: DefaultRoots.userFiles),
+                minSize: minSizeMB * 1024 * 1024,
+                limit: limit
             )
             if let g { groups = [g] }
             denied = d
@@ -126,9 +142,9 @@ public enum CLIRunner {
 
         case "old-files", "old":
             let (g, d, items) = await UserFilesScanner().oldFiles(
-                roots: resolve(options.roots, default: DefaultRoots.documents),
-                olderThanDays: options.days,
-                limit: options.limit
+                roots: resolve(roots, default: DefaultRoots.documents),
+                olderThanDays: days,
+                limit: limit
             )
             if let g { groups = [g] }
             denied = d
@@ -136,9 +152,10 @@ public enum CLIRunner {
 
         case "installers":
             let result = await InstallersScanner().scan(
-                roots: resolve(options.roots, default: ["~/Downloads", "~/Desktop"]),
-                olderThanDays: options.days,
-                limit: options.limit
+                roots: resolve(roots, default: ["~/Downloads", "~/Desktop"]),
+                olderThanDays: days,
+                limit: limit,
+                onProgress: onProgress
             )
             groups = result.groups
             denied = result.deniedPaths
@@ -146,9 +163,10 @@ public enum CLIRunner {
 
         case "duplicates", "dup":
             let (g, d, deletable, hashed) = await DuplicateScanner().scan(
-                roots: resolve(options.roots, default: DefaultRoots.documents),
-                minSize: options.minSizeMB * 1024 * 1024,
-                limit: options.limit
+                roots: resolve(roots, default: DefaultRoots.documents),
+                minSize: minSizeMB * 1024 * 1024,
+                limit: limit,
+                onProgress: onProgress
             )
             groups = g
             denied = d
@@ -156,11 +174,11 @@ public enum CLIRunner {
             warnings.append("对 \(hashed) 个文件做了部分哈希")
 
         case "smart":
-            let (g, d, perCategory) = await SystemJunkScanner().scan(limit: options.limit)
+            let (g, d, perCategory) = await SystemJunkScanner().scan(limit: limit)
             let (pg, pitems, _) = await ProjectJunkScanner().scan(
                 roots: resolve([], default: DefaultRoots.projects),
-                maxDepth: options.depth,
-                limit: options.limit
+                maxDepth: depth,
+                limit: limit
             )
             groups = g + pg
             denied = d
@@ -178,13 +196,52 @@ public enum CLIRunner {
             }
 
         default:
-            FileHandle.standardError.write(Data("unknown module: \(module)\n".utf8))
-            return
+            return nil
         }
 
         if !denied.isEmpty {
             warnings.append("\(denied.count) 个目录因缺少「完全磁盘访问权限」读取失败，结果可能偏小")
         }
+
+        return ModuleScanOutput(
+            module: module,
+            groups: groups,
+            entries: allEntries,
+            deniedPaths: denied,
+            warnings: warnings
+        )
+    }
+
+    static func scan(module: String, options: Options) async {
+        let started = Date()
+
+        let emitProgress: @Sendable (Double, String, String, UInt64, Int) -> Void = { fraction, stage, detail, bytes, items in
+            ProgressReporter.emit(
+                fraction: fraction,
+                stage: stage,
+                detail: detail,
+                foundBytes: bytes,
+                foundItems: items
+            )
+        }
+
+        guard let output = await executeModule(
+            module: module,
+            limit: options.limit,
+            roots: options.roots,
+            minSizeMB: options.minSizeMB,
+            days: options.days,
+            depth: options.depth,
+            onProgress: emitProgress
+        ) else {
+            FileHandle.standardError.write(Data("unknown module: \(module)\n".utf8))
+            return
+        }
+
+        let groups = output.groups
+        let denied = output.deniedPaths
+        let warnings = output.warnings
+        let allEntries = output.entries
 
         let totalBytes = groups.reduce(0) { $0 &+ $1.bytes }
         let totalItems = groups.reduce(0) { $0 &+ $1.items }
@@ -552,19 +609,67 @@ public enum CLIRunner {
     // MARK: - Output
 
     static func makeEntries(_ items: [FileItem], limit: Int, category: String? = nil) -> [ScanEntry] {
-        items
-            .filter { !$0.isDirectory || $0.isPackage }
-            .sorted { $0.size > $1.size }
-            .prefix(limit)
-            .map {
-                ScanEntry(
-                    id: Util.stableID($0.url.path(percentEncoded: false)),
-                    path: $0.url.path(percentEncoded: false),
-                    bytes: $0.size,
-                    modified: Util.iso($0.modificationDate),
+        guard limit > 0, !items.isEmpty else { return [] }
+        // Sort lightweight (size, idx) pairs rather than swapping whole FileItem structs (URL/String/Date retains).
+        var pairs: [(size: UInt64, index: Int)] = []
+        pairs.reserveCapacity(items.count)
+        for (i, item) in items.enumerated() where !item.isDirectory || item.isPackage {
+            pairs.append((item.size, i))
+        }
+        guard !pairs.isEmpty else { return [] }
+
+        let selectedIndices: ArraySlice<Int>
+        if pairs.count > limit && limit <= 256 {
+            var best: [(size: UInt64, index: Int)] = []
+            best.reserveCapacity(limit + 1)
+            var threshold: UInt64 = 0
+            for pair in pairs {
+                if best.count < limit {
+                    best.append(pair)
+                    if best.count == limit {
+                        best.sort { $0.size > $1.size }
+                        threshold = best[limit - 1].size
+                    }
+                } else if pair.size > threshold {
+                    var lo = 0
+                    var hi = limit
+                    while lo < hi {
+                        let mid = (lo + hi) >> 1
+                        if best[mid].size > pair.size { lo = mid + 1 } else { hi = mid }
+                    }
+                    best.insert(pair, at: lo)
+                    best.removeLast()
+                    threshold = best[limit - 1].size
+                }
+            }
+            if best.count < limit { best.sort { $0.size > $1.size } }
+            return best.map { pair in
+                let item = items[pair.index]
+                let path = item.url.path(percentEncoded: false)
+                return ScanEntry(
+                    id: Util.stableID(path),
+                    path: path,
+                    bytes: item.size,
+                    modified: Util.iso(item.modificationDate),
                     category: category
                 )
             }
+        }
+
+        pairs.sort { $0.size > $1.size }
+        let take = min(limit, pairs.count)
+        selectedIndices = ArraySlice(pairs[0..<take].map(\.index))
+        return selectedIndices.map { idx in
+            let item = items[idx]
+            let path = item.url.path(percentEncoded: false)
+            return ScanEntry(
+                id: Util.stableID(path),
+                path: path,
+                bytes: item.size,
+                modified: Util.iso(item.modificationDate),
+                category: category
+            )
+        }
     }
 
     static func printHuman(_ report: ScanReport) {
@@ -627,21 +732,7 @@ public enum CLIRunner {
     // MARK: - Snapshot
 
     static func writeSnapshot(module: String, entries: [ScanEntry]) -> String? {
-        guard !entries.isEmpty else { return nil }
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".sweep/snapshots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-
-        let stamp = Int(Date().timeIntervalSince1970)
-        let url = base.appendingPathComponent("\(module)-\(stamp).json")
-        guard let data = try? JSONEncoder().encode(entries) else { return nil }
-        do {
-            try data.write(to: url)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return url.path
-        } catch {
-            return nil
-        }
+        SnapshotStore.write(module: module, entries: entries)
     }
 
     // MARK: - Helpers

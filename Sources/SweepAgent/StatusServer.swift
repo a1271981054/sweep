@@ -227,6 +227,20 @@ public final class StatusServer {
     }
 
     private func summarize(_ url: URL) -> [[String: Any]]? {
+        if let cached = SnapshotCache.shared.getIfLoaded(path: url.path) {
+            return cached.byCategory
+                .map { key, items -> [String: Any] in
+                    let bytes = items.reduce(UInt64(0)) { $0 &+ $1.entry.bytes }
+                    return [
+                        "category": key.isEmpty ? "unknown" : key,
+                        "label": CategoryLabels.label(key.isEmpty ? "unknown" : key),
+                        "bytes": bytes,
+                        "items": items.count,
+                    ]
+                }
+                .sorted { ($0["bytes"] as? UInt64 ?? 0) > ($1["bytes"] as? UInt64 ?? 0) }
+        }
+
         guard let data = try? Data(contentsOf: url),
               let entries = try? JSONDecoder().decode([ScanEntry].self, from: data)
         else { return nil }
